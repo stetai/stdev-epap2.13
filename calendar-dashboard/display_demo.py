@@ -30,7 +30,8 @@ ICS_SOURCES = [
     # pathlib.Path("~/Sync/calendar"),                        # ~ = your home folder
 ]
 
-HOURS = 24          # how many hours ahead to show 
+HOURS = 24          # how many hours ahead to show regular events
+HOURS_IMPORTANT = HOURS  # how many hours ahead to show 'important' events
 HOURS_PB = 6        #full progress bar span
 FONT_SIZE = 16
 LINE_H = 20         # line height in pixels - increase if lines overlap
@@ -71,8 +72,46 @@ def start_of(ev):
     return datetime.datetime.combine(s, datetime.time.min).astimezone()
 
 
+def is_important(ev):
+    c = ev.get('CATEGORIES')
+    try:
+        important = 'important' in c
+    except TypeError:
+        important = c == 'important'
+    return important
+
+
+def is_visible(ev, now):
+    """Events that are already running (start <= now) always pass, because
+    between() only returns events that are not over yet. Others must start
+    within HOURS, or within HOURS_IMPORTANT if they are important."""
+    s = start_of(ev)
+    if s <= now + datetime.timedelta(hours=HOURS):
+        return True
+    return is_important(ev) and s <= now + datetime.timedelta(hours=HOURS_IMPORTANT)
+
+
+def select_events(events, now):
+    """Pick at most MAX_LINES events (input must be sorted by start).
+    Running and important events are never dropped in favour of regular
+    upcoming ones; the remaining lines are filled with the earliest regular
+    events. The result stays in chronological order, so an important event
+    sits between regular events if some start after it, and at the bottom
+    otherwise."""
+    must = [start_of(e) <= now or is_important(e) for e in events]
+    free = MAX_LINES - sum(must)
+    chosen = []
+    for ev, m in zip(events, must):
+        if m:
+            chosen.append(ev)
+        elif free > 0:
+            chosen.append(ev)
+            free -= 1
+    return chosen
+
+
 def load_events(files, now):
-    end = now + datetime.timedelta(hours=HOURS)
+    end = now + datetime.timedelta(hours=max(HOURS, HOURS_IMPORTANT))
     events = []
     for f in files:
         try:
@@ -80,7 +119,9 @@ def load_events(files, now):
             events += recurring_ical_events.of(cal).between(now, end)
         except Exception as e:            # broken / half-synced file
             print(f"WARNING: could not read {f}: {e}")
-    return sorted(events, key=start_of)
+    events = sorted(events, key=start_of)
+    events = [ev for ev in events if is_visible(ev, now)]
+    return select_events(events, now)
 
 
 def is_all_day(ev):
@@ -101,14 +142,6 @@ def label_title(ev):
     if title == '🚿': title = "Shower"
     if title == '🚊': title = "To Hamm/DoDorm"
     return title
-
-def is_important(ev):
-    c = ev.get('CATEGORIES')
-    try:
-        important = 'important' in c
-    except TypeError:
-        important = c == 'important'
-    return important
 
 def progress_fraction(ev, now):
     """0.0 = event is HOURS or more away, 1.0 = event has started.
@@ -151,7 +184,7 @@ def draw_progress_bar(layer, x, y, fraction, label, font):
     draw.rectangle((x, top, right, bottom), outline=INK, width=1)
     inner_w = PB_WIDTH - 2  
     for offset in range(inner_w//HOURS_PB, inner_w, inner_w//HOURS_PB):
-        draw.point((x + 1 + offset, top-1), fill=INK)
+        draw.point((x + 1 + offset, top), fill=NO_INK)
     draw.text((x + 40, y), label, font=font, fill=INK)
                     # space inside the outline
     fill_w = round(fraction * inner_w)
