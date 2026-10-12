@@ -25,7 +25,7 @@ WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
-    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
+    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
     # pathlib.Path("/mnt/data/Documents/other-calendars"),   # a whole folder
     # pathlib.Path("~/Sync/calendar"),                        # ~ = your home folder
 ]
@@ -95,8 +95,18 @@ def label_time(ev, now):
 
 
 def label_title(ev):
-    return str(ev.get("SUMMARY", "(no title)"))
+    title = str(ev.get("SUMMARY", "(no title)"))
+    if title == '🍽': title = "Meal"
+    if title == '💤': title = "Sleep"
+    return title
 
+def is_important(ev):
+    c = ev.get('CATEGORIES')
+    try:
+        important = 'important' in c
+    except TypeError:
+        important = c == 'important'
+    return important
 
 def progress_fraction(ev, now):
     """0.0 = event is HOURS or more away, 1.0 = event has started.
@@ -128,8 +138,8 @@ def fit(text, draw, font, max_width):
 
 
 def draw_progress_bar(layer, x, y, fraction, label, font):
-    """Outlined box with the time label inside. The box fills from left to
-    right; where it is filled, the label is shown inverted (knocked out).
+    """Outlined box with the time label inside. The box fills from right to left; 
+    where it is filled, the label is shown inverted (knocked out).
 
     layer: (image, draw) pair of the channel to draw on."""
     img, draw = layer
@@ -142,8 +152,8 @@ def draw_progress_bar(layer, x, y, fraction, label, font):
     inner_w = PB_WIDTH - 2                      # space inside the outline
     fill_w = round(fraction * inner_w)
     if fill_w > 0:
-        box = (x + 1, top + 1, x + 1 + fill_w, bottom)   # right/lower edge exclusive
-        box = (right - fill_w, top + 1, right, bottom)
+        #box = (x + 1, top + 1, x + 1 + fill_w, bottom)   # fill from left to right
+        box = (right - fill_w, top + 1, right, bottom)   # fill from right to left
         region = img.crop(box).convert("L")
         img.paste(ImageOps.invert(region).convert("1"), box)
 
@@ -176,6 +186,8 @@ def render(header, events, now):
     today_layer = black_l
     #today_layer = red_l              # <- today's events in red
 
+    important_layer = black_l         # <- background of important events
+
     # ---- header -----------------------------------------------------------
     header_layer[1].text((MARGIN_X, 0), header, font=font, fill=INK)
     separator_layer[1].line((0, LINE_H, WIDTH - 1, LINE_H), fill=INK, width=1)
@@ -188,18 +200,33 @@ def render(header, events, now):
         black_l[1].text((MARGIN_X, y), "No events", font=font, fill=INK)
 
     for ev in events[:MAX_LINES]:
+        title_x = MARGIN_X + PB_WIDTH + 2
         is_today = start_of(ev).date() == now.date()
         layer = today_layer if is_today else black_l
+        layer = important_layer if is_important else black_l
         draw = layer[1]
 
-        # progress bar with time label (fills left -> right)
+        # progress bar with time label (fills right to left)
         draw_progress_bar(layer, MARGIN_X, y,
                           progress_fraction(ev, now), label_time(ev, now), font)
 
         # title
-        draw.text((MARGIN_X + PB_WIDTH + 2, y),
+        draw.text((title_x, y),
                   fit(label_title(ev), draw, font, max_w), font=font, fill=INK)
+
+        # determine whether event is important
+        if is_important(ev):
+            layer = important_layer 
+            img, draw = layer
+
+            top, bottom = y + 1, y + FONT_SIZE + 2
+            box = (title_x, top, title_x + max_w, bottom)
+            region = img.crop(box).convert("L")
+            img.paste(ImageOps.invert(region).convert("1"), box)
+        
         y += LINE_H
+
+        print(f"y: {label_title(ev)}")
 
     return black, red
 
