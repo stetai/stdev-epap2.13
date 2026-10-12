@@ -31,7 +31,7 @@ ICS_SOURCES = [
 ]
 
 HOURS = 24          # how many hours ahead to show 
-HOURS_PB = HOURS        #full progress bar span
+HOURS_PB = 6        #full progress bar span
 FONT_SIZE = 16
 LINE_H = 20         # line height in pixels - increase if lines overlap
 MAX_LINES = 5       # header + 5 lines x 20 px fits into 122 px
@@ -137,12 +137,13 @@ def draw_progress_bar(layer, x, y, fraction, label, font):
     right = x + PB_WIDTH - 1
 
     draw.rectangle((x, top, right, bottom), outline=INK, width=1)
-    draw.text((x + 2, y), label, font=font, fill=INK)
+    draw.text((x + 40, y), label, font=font, fill=INK)
 
     inner_w = PB_WIDTH - 2                      # space inside the outline
     fill_w = round(fraction * inner_w)
     if fill_w > 0:
         box = (x + 1, top + 1, x + 1 + fill_w, bottom)   # right/lower edge exclusive
+        box = (right - fill_w, top + 1, right, bottom)
         region = img.crop(box).convert("L")
         img.paste(ImageOps.invert(region).convert("1"), box)
 
@@ -228,9 +229,10 @@ def main():
     print(f"Reading {len(files)} ICS file(s)")
 
     now = datetime.datetime.now().astimezone()      # timezone-aware local time
+    #now = datetime.datetime.fromisoformat("2026-10-12T17:00:00.000Z")      # debug
     events = load_events(files, now)
 
-    header = now.strftime("%A %d.%m.")
+    header = now.strftime("%y%m%d %A")
     black, red = render(header, events, now)
 
     black.save(OUTPUT_DIR / "layer_black.png")
