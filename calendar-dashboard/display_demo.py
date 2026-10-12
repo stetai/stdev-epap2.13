@@ -32,11 +32,13 @@ ICS_SOURCES = [
 ]
 
 HOURS = 24            # how many hours ahead to show (current hour excluded)
-FONT_SIZE = 12
-LINE_H = FONT_SIZE + 4         # line height in pixels - increase if lines overlap
-MAX_LINES = 6       # header + 5 lines x 18 px fits into 122 px
+EVENTS = []
+FONT_SIZE = 16
+LINE_H = 20         # line height in pixels - increase if lines overlap
+MAX_LINES = 5       # header + 5 lines x 18 px fits into 122 px
 MARGIN_X = 2
-PREVIEW_SCALE = 6   # enlarge preview.png so you can see the pixels
+PREVIEW_SCALE = 4   # enlarge preview.png so you can see the pixels
+PB_WIDTH = 40
 
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent   # PNGs land next to this script
 
@@ -83,10 +85,16 @@ def load_events(files, now):
 
 
 def event_label(ev):
+    return f"{label_time(ev)} {label_title(ev)}"
+
+def label_time(ev):
     s = start_of(ev)
     timed = isinstance(ev["DTSTART"].dt, datetime.datetime)
-    when = s.strftime("%H:%M") if timed else s.strftime("%a")
-    return f"{when} {ev.get('SUMMARY', '(no title)')}"
+    when = s.strftime("%H%M") if timed else s.strftime("tmrw")
+    return when
+
+def label_title(ev):
+    return ev.get('SUMMARY', '(no title)')
 
 
 # =========================================================================
@@ -108,6 +116,18 @@ def fit(text, draw, font, max_width):
     while text and draw.textlength(text + "...", font=font) > max_width:
         text = text[:-1]
     return text + "..."
+
+
+def progress_bar(layer, i, x, y):
+    """Show progress bar in front of the time"""
+    return
+    print(f"i: {i}")
+    ev = EVENTS[i]
+    s = start_of(ev)
+    time_elapsed = s - datetime.datetime.now()
+    print(n, time_elapsed)
+    layer.rectangle((x, y + 5, x + PB_WIDTH - 1, y + FONT_SIZE - 1), fill=INK)
+    #EVENTS[n]
 
 
 def render(header, items):
@@ -136,18 +156,26 @@ def render(header, items):
     #separator_layer = draw_red       # <- uncomment: separator line in red
 
     today_layer = draw_black
-    #today_layer = draw_red           # <- uncomment: today's events in red
+    today_layer = draw_red           # <- uncomment: today's events in red
 
     # ---- header -----------------------------------------------------------
     header_layer.text((MARGIN_X, 0), header, font=font, fill=INK)
     separator_layer.line((0, LINE_H, WIDTH - 1, LINE_H), fill=INK, width=1)
 
     # ---- events -----------------------------------------------------------
-    max_w = WIDTH - 2 * MARGIN_X
-    y = LINE_H + 3
-    for text, is_today in items[:MAX_LINES]:
+    max_w = WIDTH - 2 * MARGIN_X - (PB_WIDTH + 2)
+    y = LINE_H + 2
+    #for text, is_today in items[:MAX_LINES]:
+    for e in EVENTS:
+        text = label_title(e)
+        is_today = False#start_of(e).date() == datetime.date.today
         layer = today_layer if is_today else draw_black
-        layer.text((MARGIN_X, y), fit(text, layer, font, max_w), font=font, fill=INK)
+        #layer.text((MARGIN_X, y), f"{n}", font=font, fill=INK)
+        # render progress bar
+        #progress_bar(layer, e, MARGIN_X, y)
+        # render time (width is 1.5x FONT_SIZE)
+        # render title 
+        layer.text((MARGIN_X + PB_WIDTH + 2, y), fit(text, layer, font, max_w), font=font, fill=INK)
         y += LINE_H
 
     return black, red
@@ -177,20 +205,22 @@ def main():
     files = collect_ics_files(sources)
     print(f"Reading {len(files)} ICS file(s)")
 
-    today = datetime.datetime.now()
-    events = load_events(files, today)
-    items = [(event_label(e), start_of(e).date() == today) for e in events]
+    now = datetime.datetime.now()
+    EVENTS = load_events(files, now)
+    items = [(event_label(e), start_of(e).date() == now) for e in EVENTS]
     if not items:
         items = [("No events", False)]
 
-    header = today.strftime("%A %d.%m.")
+    header = now.strftime("%A %d.%m.")
     black, red = render(header, items)
 
     black.save(OUTPUT_DIR / "layer_black.png")
     red.save(OUTPUT_DIR / "layer_red.png")
-    compose_preview(black, red).save(OUTPUT_DIR / "preview.png")
+    pv = compose_preview(black, red)
+    pv.save(OUTPUT_DIR / "preview1.png")
+    pv.save(OUTPUT_DIR / "preview2.png")
 
-    print(f"Events found: {len(events)} (showing up to {MAX_LINES})")
+    print(f"Events found: {len(EVENTS)} (showing up to {MAX_LINES})")
     print("Red channel:", "contains red ink" if has_ink(red)
           else "EMPTY - still cleared and would be sent as all 'no ink'")
     print(f"Saved preview.png, layer_black.png, layer_red.png in {OUTPUT_DIR}")
