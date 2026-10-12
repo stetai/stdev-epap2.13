@@ -37,7 +37,7 @@ LINE_H = 20         # line height in pixels - increase if lines overlap
 MAX_LINES = 5       # header + 5 lines x 20 px fits into 122 px
 MARGIN_X = 2
 PREVIEW_SCALE = 4   # enlarge preview.png so you can see the pixels
-PB_WIDTH = 80       # width of the progress bar (it also holds the time label)
+PB_WIDTH = 80       # width of the progress bar, best if HOURS_PB * n + 2 for some integer n
 
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent   # PNGs land next to this script
 
@@ -98,6 +98,8 @@ def label_title(ev):
     title = str(ev.get("SUMMARY", "(no title)"))
     if title == '🍽': title = "Meal"
     if title == '💤': title = "Sleep"
+    if title == '🚿': title = "Shower"
+    if title == '🚊': title = "To Hamm/DoDorm"
     return title
 
 def is_important(ev):
@@ -147,9 +149,11 @@ def draw_progress_bar(layer, x, y, fraction, label, font):
     right = x + PB_WIDTH - 1
 
     draw.rectangle((x, top, right, bottom), outline=INK, width=1)
+    inner_w = PB_WIDTH - 2  
+    for offset in range(inner_w//HOURS_PB, inner_w, inner_w//HOURS_PB):
+        draw.point((x + 1 + offset, top-1), fill=INK)
     draw.text((x + 40, y), label, font=font, fill=INK)
-
-    inner_w = PB_WIDTH - 2                      # space inside the outline
+                    # space inside the outline
     fill_w = round(fraction * inner_w)
     if fill_w > 0:
         #box = (x + 1, top + 1, x + 1 + fill_w, bottom)   # fill from left to right
@@ -186,7 +190,7 @@ def render(header, events, now):
     today_layer = black_l
     #today_layer = red_l              # <- today's events in red
 
-    important_layer = black_l         # <- background of important events
+    important_layer = red_l         # <- background of important events
 
     # ---- header -----------------------------------------------------------
     header_layer[1].text((MARGIN_X, 0), header, font=font, fill=INK)
@@ -203,7 +207,7 @@ def render(header, events, now):
         title_x = MARGIN_X + PB_WIDTH + 2
         is_today = start_of(ev).date() == now.date()
         layer = today_layer if is_today else black_l
-        layer = important_layer if is_important else black_l
+        layer = important_layer if is_important(ev) else black_l
         draw = layer[1]
 
         # progress bar with time label (fills right to left)
