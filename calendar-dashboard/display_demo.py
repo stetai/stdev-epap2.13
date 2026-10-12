@@ -1,15 +1,14 @@
-
 """
 E-paper calendar PREVIEW - runs on your computer, no display needed.
 
 It renders the two channels exactly as the panel would receive them:
   layer_black.png  - black/white channel  (black = ink, white = no ink)
   layer_red.png    - red channel          (black = red ink, white = no ink)
-  preview.png      - both combined, enlarged 3x, roughly how the panel looks
+  preview.png      - both combined, enlarged, roughly how the panel looks
 
 Run:
-  uv run preview_calendar.py                      # uses ICS_SOURCES below
-  uv run preview_calendar.py /path/a.ics /dir/    # files/folders on the command line
+  uv run display_demo.py                      # uses ICS_SOURCES below
+  uv run display_demo.py /path/a.ics /dir/    # files/folders on the command line
 """
 import datetime
 import pathlib
@@ -31,14 +30,14 @@ ICS_SOURCES = [
     # pathlib.Path("~/Sync/calendar"),                        # ~ = your home folder
 ]
 
-HOURS = 24            # how many hours ahead to show (current hour excluded)
-EVENTS = []
+HOURS = 24          # how many hours ahead to show 
+HOURS_PB = 6        #full progress bar span
 FONT_SIZE = 16
 LINE_H = 20         # line height in pixels - increase if lines overlap
-MAX_LINES = 5       # header + 5 lines x 18 px fits into 122 px
+MAX_LINES = 5       # header + 5 lines x 20 px fits into 122 px
 MARGIN_X = 2
 PREVIEW_SCALE = 4   # enlarge preview.png so you can see the pixels
-PB_WIDTH = 40
+PB_WIDTH = 40       # width of the progress bar (it also holds the time label)
 
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent   # PNGs land next to this script
 
@@ -84,17 +83,27 @@ def load_events(files, now):
     return sorted(events, key=start_of)
 
 
-def event_label(ev):
-    return f"{label_time(ev)} {label_title(ev)}"
+def is_all_day(ev):
+    return not isinstance(ev["DTSTART"].dt, datetime.datetime)
 
-def label_time(ev):
+
+def label_time(ev, now):
     s = start_of(ev)
-    timed = isinstance(ev["DTSTART"].dt, datetime.datetime)
-    when = s.strftime("%H%M") if timed else s.strftime("tmrw")
-    return when
+    if not is_all_day(ev):
+        return s.strftime("%H%M")
+    return "tday" if s.date() == now.date() else "tmrw"
+
 
 def label_title(ev):
-    return ev.get('SUMMARY', '(no title)')
+    return str(ev.get("SUMMARY", "(no title)"))
+
+
+def progress_fraction(ev, now):
+    """0.0 = event is HOURS or more away, 1.0 = event has started.
+    The bar therefore fills up (left to right) as the event approaches."""
+    remaining = (start_of(ev) - now).total_seconds()
+    frac = 1 - remaining / (HOURS_PB * 3600)
+    return max(0.0, min(1.0, frac))
 
 
 # =========================================================================
@@ -118,20 +127,28 @@ def fit(text, draw, font, max_width):
     return text + "..."
 
 
-def progress_bar(layer, i, x, y):
-    """Show progress bar in front of the time"""
-    return
-    print(f"i: {i}")
-    ev = EVENTS[i]
-    s = start_of(ev)
-    time_elapsed = s - datetime.datetime.now()
-    print(n, time_elapsed)
-    layer.rectangle((x, y + 5, x + PB_WIDTH - 1, y + FONT_SIZE - 1), fill=INK)
-    #EVENTS[n]
+def draw_progress_bar(layer, x, y, fraction, label, font):
+    """Outlined box with the time label inside. The box fills from left to
+    right; where it is filled, the label is shown inverted (knocked out).
+
+    layer: (image, draw) pair of the channel to draw on."""
+    img, draw = layer
+    top, bottom = y + 1, y + FONT_SIZE + 1
+    right = x + PB_WIDTH - 1
+
+    draw.rectangle((x, top, right, bottom), outline=INK, width=1)
+    draw.text((x + 2, y), label, font=font, fill=INK)
+
+    inner_w = PB_WIDTH - 2                      # space inside the outline
+    fill_w = round(fraction * inner_w)
+    if fill_w > 0:
+        box = (x + 1, top + 1, x + 1 + fill_w, bottom)   # right/lower edge exclusive
+        region = img.crop(box).convert("L")
+        img.paste(ImageOps.invert(region).convert("1"), box)
 
 
-def render(header, items):
-    """items: list of (text, is_today). Returns (black_layer, red_layer)."""
+def render(header, events, now):
+    """Returns (black_layer, red_layer) as 1-bit images."""
 
     # ---------------------------------------------------------------------
     # BOTH channels are created fresh on EVERY run, i.e. cleared to "no ink".
@@ -141,41 +158,46 @@ def render(header, items):
     # ---------------------------------------------------------------------
     black = Image.new("1", (WIDTH, HEIGHT), NO_INK)
     red = Image.new("1", (WIDTH, HEIGHT), NO_INK)
-    draw_black = ImageDraw.Draw(black)
-    draw_red = ImageDraw.Draw(red)
+    black_l = (black, ImageDraw.Draw(black))
+    red_l = (red, ImageDraw.Draw(red))
     font = load_font()
 
     # ---------------------------------------------------------------------
     # CHOOSE THE CHANNEL FOR EACH ELEMENT
-    # Default: everything black. To use red, UNCOMMENT the "= draw_red" line.
+    # Default: everything black. To use red, UNCOMMENT the "= red_l" line.
     # ---------------------------------------------------------------------
-    header_layer = draw_black
-    #header_layer = draw_red          # <- uncomment: header in red
+    header_layer = black_l
+    #header_layer = red_l             # <- uncomment: header in red
 
-    separator_layer = draw_black
-    #separator_layer = draw_red       # <- uncomment: separator line in red
+    separator_layer = black_l
+    #separator_layer = red_l          # <- uncomment: separator line in red
 
-    today_layer = draw_black
-    today_layer = draw_red           # <- uncomment: today's events in red
+    today_layer = black_l
+    today_layer = red_l              # <- today's events in red
 
     # ---- header -----------------------------------------------------------
-    header_layer.text((MARGIN_X, 0), header, font=font, fill=INK)
-    separator_layer.line((0, LINE_H, WIDTH - 1, LINE_H), fill=INK, width=1)
+    header_layer[1].text((MARGIN_X, 0), header, font=font, fill=INK)
+    separator_layer[1].line((0, LINE_H, WIDTH - 1, LINE_H), fill=INK, width=1)
 
     # ---- events -----------------------------------------------------------
     max_w = WIDTH - 2 * MARGIN_X - (PB_WIDTH + 2)
     y = LINE_H + 2
-    #for text, is_today in items[:MAX_LINES]:
-    for e in EVENTS:
-        text = label_title(e)
-        is_today = False#start_of(e).date() == datetime.date.today
-        layer = today_layer if is_today else draw_black
-        #layer.text((MARGIN_X, y), f"{n}", font=font, fill=INK)
-        # render progress bar
-        #progress_bar(layer, e, MARGIN_X, y)
-        # render time (width is 1.5x FONT_SIZE)
-        # render title 
-        layer.text((MARGIN_X + PB_WIDTH + 2, y), fit(text, layer, font, max_w), font=font, fill=INK)
+
+    if not events:
+        black_l[1].text((MARGIN_X, y), "No events", font=font, fill=INK)
+
+    for ev in events[:MAX_LINES]:
+        is_today = start_of(ev).date() == now.date()
+        layer = today_layer if is_today else black_l
+        draw = layer[1]
+
+        # progress bar with time label (fills left -> right)
+        draw_progress_bar(layer, MARGIN_X, y,
+                          progress_fraction(ev, now), label_time(ev, now), font)
+
+        # title
+        draw.text((MARGIN_X + PB_WIDTH + 2, y),
+                  fit(label_title(ev), draw, font, max_w), font=font, fill=INK)
         y += LINE_H
 
     return black, red
@@ -205,22 +227,17 @@ def main():
     files = collect_ics_files(sources)
     print(f"Reading {len(files)} ICS file(s)")
 
-    now = datetime.datetime.now()
-    EVENTS = load_events(files, now)
-    items = [(event_label(e), start_of(e).date() == now) for e in EVENTS]
-    if not items:
-        items = [("No events", False)]
+    now = datetime.datetime.now().astimezone()      # timezone-aware local time
+    events = load_events(files, now)
 
     header = now.strftime("%A %d.%m.")
-    black, red = render(header, items)
+    black, red = render(header, events, now)
 
     black.save(OUTPUT_DIR / "layer_black.png")
     red.save(OUTPUT_DIR / "layer_red.png")
-    pv = compose_preview(black, red)
-    pv.save(OUTPUT_DIR / "preview1.png")
-    pv.save(OUTPUT_DIR / "preview2.png")
+    compose_preview(black, red).save(OUTPUT_DIR / "preview.png")
 
-    print(f"Events found: {len(EVENTS)} (showing up to {MAX_LINES})")
+    print(f"Events found: {len(events)} (showing up to {MAX_LINES})")
     print("Red channel:", "contains red ink" if has_ink(red)
           else "EMPTY - still cleared and would be sent as all 'no ink'")
     print(f"Saved preview.png, layer_black.png, layer_red.png in {OUTPUT_DIR}")
