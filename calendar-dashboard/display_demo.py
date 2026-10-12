@@ -174,7 +174,7 @@ def render(header, events, now):
     #separator_layer = red_l          # <- uncomment: separator line in red
 
     today_layer = black_l
-    today_layer = red_l              # <- today's events in red
+    #today_layer = red_l              # <- today's events in red
 
     # ---- header -----------------------------------------------------------
     header_layer[1].text((MARGIN_X, 0), header, font=font, fill=INK)
