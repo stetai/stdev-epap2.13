@@ -31,13 +31,13 @@ ICS_SOURCES = [
 ]
 
 HOURS = 24          # how many hours ahead to show 
-HOURS_PB = 6        #full progress bar span
+HOURS_PB = HOURS        #full progress bar span
 FONT_SIZE = 16
 LINE_H = 20         # line height in pixels - increase if lines overlap
 MAX_LINES = 5       # header + 5 lines x 20 px fits into 122 px
 MARGIN_X = 2
 PREVIEW_SCALE = 4   # enlarge preview.png so you can see the pixels
-PB_WIDTH = 40       # width of the progress bar (it also holds the time label)
+PB_WIDTH = 80       # width of the progress bar (it also holds the time label)
 
 OUTPUT_DIR = pathlib.Path(__file__).resolve().parent   # PNGs land next to this script
 
@@ -235,7 +235,9 @@ def main():
 
     black.save(OUTPUT_DIR / "layer_black.png")
     red.save(OUTPUT_DIR / "layer_red.png")
-    compose_preview(black, red).save(OUTPUT_DIR / "preview.png")
+    pv = compose_preview(black, red)
+    pv.save(OUTPUT_DIR / "preview1.png")
+    pv.save(OUTPUT_DIR / "preview2.png")
 
     print(f"Events found: {len(events)} (showing up to {MAX_LINES})")
     print("Red channel:", "contains red ink" if has_ink(red)
