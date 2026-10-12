@@ -194,6 +194,50 @@ def draw_progress_bar(layer, x, y, fraction, label, font):
         region = img.crop(box).convert("L")
         img.paste(ImageOps.invert(region).convert("1"), box)
 
+def render_logo(layer, x, y):
+    img, draw = layer
+
+    stetai_logo_coding = [
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 1, 0, 1, 1, 0, 1, 1, 1],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    ]
+
+    stetai_logo_arts = [
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 1, 0, 1, 1, 0, 1, 1, 1],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    ]
+
+    logo = stetai_logo_coding
+
+    for row, line in enumerate(logo):
+        for col, value in enumerate(line):
+            if value:
+                draw.point((x + col, y + row), fill=INK)
+
 
 def render(header, events, now):
     """Returns (black_layer, red_layer) as 1-bit images."""
@@ -263,7 +307,7 @@ def render(header, events, now):
         
         y += LINE_H
 
-        print(f"y: {label_title(ev)}")
+    render_logo(red_l, WIDTH - 12 - MARGIN_X, 4) # 18 here is the width of the logo defined in the matrix
 
     return black, red
 
