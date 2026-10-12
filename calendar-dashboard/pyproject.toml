@@ -1,0 +1,10 @@
+[project]
+name = "calendar-dashboard"
+version = "0.1.0"
+description = "Demo project"
+requires-python = ">=3.10"
+dependencies = [
+    "icalendar",
+    "recurring_ical_events",
+    "pillow>=10.1",
+]
