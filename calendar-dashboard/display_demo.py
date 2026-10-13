@@ -26,7 +26,7 @@ WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
-    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
+    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
     # pathlib.Path("/mnt/data/Documents/other-calendars"),   # a whole folder
     # pathlib.Path("~/Sync/calendar"),                        # ~ = your home folder
 ]
