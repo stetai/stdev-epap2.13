@@ -25,7 +25,7 @@ WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
-    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
+    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
     # pathlib.Path("/mnt/data/Documents/other-calendars"),   # a whole folder
     # pathlib.Path("~/Sync/calendar"),                        # ~ = your home folder
 ]
@@ -135,13 +135,12 @@ def label_time(ev, now):
     return "tday" if s.date() == now.date() else "tmrw"
 
 
+TITLE_MAP = {"🍽": "Meal", "💤": "Sleep", "🚿": "Shower", "🚊": "To Hamm/DoDorm"}
+
 def label_title(ev):
-    title = str(ev.get("SUMMARY", "(no title)"))
-    if title == '🍽': title = "Meal"
-    if title == '💤': title = "Sleep"
-    if title == '🚿': title = "Shower"
-    if title == '🚊': title = "To Hamm/DoDorm"
-    return title
+    # uses the SUMMARY of the (possibly edited) occurrence
+    title = str(ev.get("SUMMARY", "(no title)")).replace("\ufe0f", "").strip()
+    return TITLE_MAP.get(title, title)
 
 def progress_fraction(ev, now):
     """0.0 = event is HOURS or more away, 1.0 = event has started.
@@ -200,8 +199,8 @@ def render_logo(layer, x, y):
     stetai_logo_coding = [
         [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
         [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
         [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
         [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
         [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
         [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
@@ -215,18 +214,24 @@ def render_logo(layer, x, y):
     ]
 
     stetai_logo_arts = [
-        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
-        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
         [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
-        [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
-        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-        [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
         [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
         [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
-        [1, 1, 1, 0, 1, 1, 0, 1, 1, 1],
-        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
-        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
         [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
         [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
     ]
