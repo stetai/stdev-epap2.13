@@ -11,6 +11,7 @@ Run:
   uv run display_demo.py /path/a.ics /dir/    # files/folders on the command line
 """
 import datetime
+import json
 import pathlib
 import sys
 
@@ -63,6 +64,20 @@ def collect_ics_files(sources):
     return files
 
 
+def is_cancelled(ev):
+    return str(ev.get("STATUS", "")).upper() == "CANCELLED"
+
+
+def dedupe(events):
+    seen, out = set(), []
+    for ev in events:
+        key = (str(ev.get("UID", id(ev))), start_of(ev))
+        if key not in seen:
+            seen.add(key)
+            out.append(ev)
+    return out
+
+
 def start_of(ev):
     """Event start as a timezone-aware local datetime, so all-day events
     (date) and timed events (datetime) can be sorted together."""
@@ -72,13 +87,23 @@ def start_of(ev):
     return datetime.datetime.combine(s, datetime.time.min).astimezone()
 
 
+def categories_of(ev):
+    """CATEGORIES as a plain list of strings (handles vCategory, lists, str)."""
+    c = ev.get("CATEGORIES")
+    if c is None:
+        return []
+    out = []
+    for item in (c if isinstance(c, list) else [c]):
+        cats = getattr(item, "cats", None)
+        if cats is not None:
+            out += [str(x) for x in cats]
+        else:
+            out += [s.strip() for s in str(item).split(",")]
+    return out
+
+
 def is_important(ev):
-    c = ev.get('CATEGORIES')
-    try:
-        important = 'important' in c
-    except TypeError:
-        important = c == 'important'
-    return important
+    return "important" in categories_of(ev)
 
 
 def is_visible(ev, now):
@@ -110,16 +135,105 @@ def select_events(events, now):
     return chosen
 
 
+def to_local(dt):
+    """Aware local datetime from datetime/date/naive datetime."""
+    if isinstance(dt, datetime.datetime):
+        return dt.astimezone()
+    return datetime.datetime.combine(dt, datetime.time.min).astimezone()
+
+
+def end_of(ev):
+    """Event end as aware local datetime (falls back to DURATION / start)."""
+    if "DTEND" in ev:
+        return to_local(ev["DTEND"].dt)
+    if "DURATION" in ev:
+        return start_of(ev) + ev["DURATION"].dt
+    return start_of(ev)
+
+
+def parse_iso(s):
+    """'2026-10-13T12:30:00.000Z' -> aware local datetime."""
+    return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
+
+
+def read_exceptions(component):
+    """X-EXCEPTIONS is a JSON object {original_date: {title,color,categories,
+    start,end}} - Stedule's own format, NOT RECURRENCE-ID."""
+    raw = component.get("X-EXCEPTIONS")
+    if not raw:
+        return {}
+    try:
+        return json.loads(str(raw))
+    except ValueError as e:
+        print(f"WARNING: bad X-EXCEPTIONS ({e})")
+        return {}
+
+
+def apply_exception(occ, exc):
+    occ = occ.copy()
+    if "title" in exc:
+        occ["SUMMARY"] = exc["title"]
+    if "categories" in exc:
+        occ["CATEGORIES"] = exc["categories"]
+    if "color" in exc:
+        occ["COLOR"] = exc["color"]
+    if "start" in exc:
+        # keep the original duration if only the start moved
+        old_len = end_of(occ) - start_of(occ)
+        new_start = parse_iso(exc["start"])
+        occ["DTSTART"] = icalendar.vDDDTypes(new_start)
+        occ.pop("DTEND", None)
+        occ.pop("DURATION", None)
+        occ["DTEND"] = icalendar.vDDDTypes(
+            parse_iso(exc["end"]) if "end" in exc else new_start + old_len)
+    elif "end" in exc:
+        occ["DTEND"] = icalendar.vDDDTypes(parse_iso(exc["end"]))
+    return occ
+
+
+def expand_with_exceptions(cal, now, end):
+    """Like recurring_ical_events.between(), but applies X-EXCEPTIONS.
+    Series with exceptions are expanded over a wider window (covering all
+    original dates named in the exceptions), because an occurrence can be
+    moved into [now, end] from outside it. Afterwards the REAL (possibly
+    moved) times are checked against [now, end]."""
+    result = []
+    for comp in cal.walk("VEVENT"):
+        exceptions = read_exceptions(comp)
+        if not exceptions:
+            continue
+        days = [datetime.date.fromisoformat(k) for k in exceptions]
+        lo = min(now, to_local(min(days))) - datetime.timedelta(days=1)
+        hi = max(end, to_local(max(days))) + datetime.timedelta(days=2)
+        one = icalendar.Calendar()
+        one.add_component(comp)
+        for occ in recurring_ical_events.of(one).between(lo, hi):
+            key = start_of(occ).date().isoformat()      # ORIGINAL date
+            if key in exceptions:
+                occ = apply_exception(occ, exceptions[key])
+            if end_of(occ) > now and start_of(occ) <= end:
+                result.append(occ)
+    return result
+
+
 def load_events(files, now):
     end = now + datetime.timedelta(hours=max(HOURS, HOURS_IMPORTANT))
     events = []
     for f in files:
         try:
             cal = icalendar.Calendar.from_ical(f.read_bytes())
-            events += recurring_ical_events.of(cal).between(now, end)
+            # plain events and series WITHOUT exceptions
+            plain = icalendar.Calendar()
+            for comp in cal.walk("VEVENT"):
+                if not read_exceptions(comp):
+                    plain.add_component(comp)
+            found = recurring_ical_events.of(plain).between(now, end)
+            events += [e for e in found if not is_cancelled(e)]
+            # series WITH exceptions
+            events += expand_with_exceptions(cal, now, end)
         except Exception as e:            # broken / half-synced file
             print(f"WARNING: could not read {f}: {e}")
-    events = sorted(events, key=start_of)
+    events = dedupe(sorted(events, key=start_of))
     events = [ev for ev in events if is_visible(ev, now)]
     return select_events(events, now)
 
