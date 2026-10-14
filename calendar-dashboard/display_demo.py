@@ -27,8 +27,8 @@ WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
     pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
-    # pathlib.Path("/mnt/data/Documents/other-calendars"),   # a whole folder
-    # pathlib.Path("~/Sync/calendar"),                        # ~ = your home folder
+    #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
+    #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test"), # a whole folder
 ]
 
 HOURS = 24          # how many hours ahead to show regular events
@@ -105,6 +105,8 @@ def categories_of(ev):
 def is_important(ev):
     return "important" in categories_of(ev)
 
+def is_irrelevant(ev):
+    return "dismissed" in categories_of(ev)
 
 def is_visible(ev, now):
     """Events that are already running (start <= now) always pass, because
@@ -127,6 +129,8 @@ def select_events(events, now):
     free = MAX_LINES - sum(must)
     chosen = []
     for ev, m in zip(events, must):
+        if is_irrelevant(ev):
+            continue
         if m:
             chosen.append(ev)
         elif free > 0:
@@ -456,7 +460,7 @@ def main():
     print(f"Reading {len(files)} ICS file(s)")
 
     now = datetime.datetime.now().astimezone()      # timezone-aware local time
-    #now = datetime.datetime.fromisoformat("2026-10-12T17:00:00.000Z")      # debug
+    now = datetime.datetime.fromisoformat("2026-10-14T11:57:30.000+0200")      # debug
     events = load_events(files, now)
 
     header = now.strftime("%y%m%d %A")
