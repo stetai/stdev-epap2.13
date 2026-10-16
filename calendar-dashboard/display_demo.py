@@ -24,12 +24,17 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps   # "PIL" = the Pillow pac
 # =========================================================================
 WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 
+DEBUG = False
+
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
     pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
     #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
     #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test"), # a whole folder
 ]
+
+if DEBUG:
+    ICS_SOURCES = [pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics")]
 
 HOURS = 24          # how many hours ahead to show regular events
 HOURS_IMPORTANT = HOURS  # how many hours ahead to show 'important' events
@@ -331,7 +336,7 @@ def render_logo(layer, x, y):
         [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
     ]
 
-    stetai_logo_arts = [
+    stetai_logo_coding2x2 = [
         [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
         [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
         [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
@@ -389,6 +394,8 @@ def render(header, events, now):
 
     today_layer = black_l
     #today_layer = red_l              # <- today's events in red
+    #now_layer = black_l
+    now_layer = red_l
 
     important_layer = red_l         # <- background of important events
 
@@ -407,7 +414,10 @@ def render(header, events, now):
         title_x = MARGIN_X + PB_WIDTH + 2
         is_today = start_of(ev).date() == now.date()
         layer = today_layer if is_today else black_l
-        layer = important_layer if is_important(ev) else black_l
+        if is_important(ev):
+            layer = important_layer
+        if progress_fraction(ev, now) == 1:
+            layer = now_layer
         draw = layer[1]
 
         # progress bar with time label (fills right to left)
@@ -460,7 +470,8 @@ def main():
     print(f"Reading {len(files)} ICS file(s)")
 
     now = datetime.datetime.now().astimezone()      # timezone-aware local time
-    now = datetime.datetime.fromisoformat("2026-10-14T11:57:30.000+0200")      # debug
+    if DEBUG:
+        now = datetime.datetime.fromisoformat("2026-10-12T16:00:30.000+0200")      # debug
     events = load_events(files, now)
 
     header = now.strftime("%y%m%d %A")
