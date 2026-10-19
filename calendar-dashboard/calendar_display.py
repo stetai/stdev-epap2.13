@@ -1,0 +1,660 @@
+"""
+E-paper calendar for the WeAct 2.13" black/white/red module (SSD1680),
+driven by jairosh/raspberrypi-ssd1680 ("raspberrypi_epd").
+
+The picture is drawn with Pillow exactly as in display_demo.py (two 1-bit
+channels, 250x122 landscape). On the Pi the two channels are then handed to
+the driver with its public draw_bitmap()/write_buffer() API, and the panel is
+put into deep sleep afterwards.
+
+Run:
+  python calendar_display.py --preview        # PC: PNGs only, no hardware needed
+  python calendar_display.py                  # Pi: render + send to the panel
+  python calendar_display.py --force          # send even if unchanged / too soon
+  python calendar_display.py --border-test    # 1-px frame to check the visible area
+  python calendar_display.py /path/a.ics /dir/   # files/folders instead of ICS_SOURCES
+
+Outputs (always written next to this script):
+  layer_black.png  - black/white channel  (black = ink, white = no ink)
+  layer_red.png    - red channel          (black = red ink, white = no ink)
+  preview1.png / preview2.png - both combined, enlarged
+"""
+import argparse
+import datetime
+import hashlib
+import json
+import pathlib
+import signal
+import sys
+import time
+
+import icalendar
+import numpy as np
+import recurring_ical_events
+from PIL import Image, ImageDraw, ImageFont, ImageOps   # "PIL" = the Pillow package
+
+# =========================================================================
+# SETTINGS
+# =========================================================================
+WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
+
+DEBUG = False
+
+# Files and/or folders to read. Absolute paths work from anywhere.
+ICS_SOURCES = [
+    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
+    #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
+    #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test"), # a whole folder
+]
+
+if DEBUG:
+    ICS_SOURCES = [pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics")]
+
+HOURS = 24          # how many hours ahead to show regular events
+HOURS_IMPORTANT = HOURS  # how many hours ahead to show 'important' events
+HOURS_PB = 6        #full progress bar span
+FONT_SIZE = 16
+LINE_H = 20         # line height in pixels - increase if lines overlap
+MAX_LINES = 5       # header + 5 lines x 20 px fits into 122 px
+MARGIN_X = 2
+PREVIEW_SCALE = 4   # enlarge preview.png so you can see the pixels
+PB_WIDTH = 80       # width of the progress bar, best if HOURS_PB * n + 2 for some integer n
+
+OUTPUT_DIR = pathlib.Path(__file__).resolve().parent   # PNGs land next to this script
+
+# In Pillow's 1-bit mode ("1"): 1 = white = no ink, 0 = ink.
+NO_INK, INK = 1, 0
+
+# Font. None = Pillow's built-in font (needs Pillow >= 10.1 for FONT_SIZE to
+# work; older Pillow silently falls back to a tiny fixed font). For identical
+# results on PC and Pi, copy one .ttf next to this script and point here, e.g.
+# FONT_PATH = OUTPUT_DIR / "DejaVuSans-Bold.ttf"
+FONT_PATH = None
+
+# ---- panel / driver -------------------------------------------------------
+DRIVER_DIR = pathlib.Path.home() / "raspberrypi-ssd1680"   # the cloned repo
+PIN_BUSY, PIN_RESET, PIN_DC, PIN_CS = 4, 17, 27, 22         # BCM numbers
+ROTATION = 270   # landscape. If the picture is upside down: 90 AND Y_OFFSET = 6
+Y_OFFSET = 0     # rows the image is shifted down inside the driver's 250x128 canvas
+CANVAS_ROWS = 128   # driver RAM is 128 px wide; only 122 are visible (WIDTH_VISIBLE)
+MIN_REFRESH_S = 180          # manufacturer minimum between refreshes
+BUSY_TIMEOUT_S = 120         # abort if the panel never reports "not busy"
+STATE_FILE = OUTPUT_DIR / ".epaper_state.json"   # last image hash + time
+
+
+# =========================================================================
+# CALENDAR
+# =========================================================================
+def collect_ics_files(sources):
+    """Turn a list of files/folders into a list of .ics files."""
+    files = []
+    for src in sources:
+        src = pathlib.Path(src).expanduser()
+        if src.is_dir():
+            files += sorted(src.glob("*.ics"))
+        elif src.is_file():
+            files.append(src)
+        else:
+            print(f"WARNING: not found, skipped: {src}")
+    return files
+
+
+def is_cancelled(ev):
+    return str(ev.get("STATUS", "")).upper() == "CANCELLED"
+
+
+def dedupe(events):
+    seen, out = set(), []
+    for ev in events:
+        key = (str(ev.get("UID", id(ev))), start_of(ev))
+        if key not in seen:
+            seen.add(key)
+            out.append(ev)
+    return out
+
+
+def start_of(ev):
+    """Event start as a timezone-aware local datetime, so all-day events
+    (date) and timed events (datetime) can be sorted together."""
+    s = ev["DTSTART"].dt
+    if isinstance(s, datetime.datetime):
+        return s.astimezone()          # naive datetimes are treated as local time
+    return datetime.datetime.combine(s, datetime.time.min).astimezone()
+
+
+def categories_of(ev):
+    """CATEGORIES as a plain list of strings (handles vCategory, lists, str)."""
+    c = ev.get("CATEGORIES")
+    if c is None:
+        return []
+    out = []
+    for item in (c if isinstance(c, list) else [c]):
+        cats = getattr(item, "cats", None)
+        if cats is not None:
+            out += [str(x) for x in cats]
+        else:
+            out += [s.strip() for s in str(item).split(",")]
+    return out
+
+
+def is_important(ev):
+    return "important" in categories_of(ev)
+
+def is_irrelevant(ev):
+    return "dismissed" in categories_of(ev)
+
+def is_visible(ev, now):
+    """Events that are already running (start <= now) always pass, because
+    between() only returns events that are not over yet. Others must start
+    within HOURS, or within HOURS_IMPORTANT if they are important."""
+    s = start_of(ev)
+    if s <= now + datetime.timedelta(hours=HOURS):
+        return True
+    return is_important(ev) and s <= now + datetime.timedelta(hours=HOURS_IMPORTANT)
+
+
+def select_events(events, now):
+    """Pick at most MAX_LINES events (input must be sorted by start).
+    Running and important events are never dropped in favour of regular
+    upcoming ones; the remaining lines are filled with the earliest regular
+    events. The result stays in chronological order, so an important event
+    sits between regular events if some start after it, and at the bottom
+    otherwise."""
+    must = [start_of(e) <= now or is_important(e) for e in events]
+    free = MAX_LINES - sum(must)
+    chosen = []
+    for ev, m in zip(events, must):
+        if is_irrelevant(ev):
+            continue
+        if m:
+            chosen.append(ev)
+        elif free > 0:
+            chosen.append(ev)
+            free -= 1
+    return chosen
+
+
+def to_local(dt):
+    """Aware local datetime from datetime/date/naive datetime."""
+    if isinstance(dt, datetime.datetime):
+        return dt.astimezone()
+    return datetime.datetime.combine(dt, datetime.time.min).astimezone()
+
+
+def end_of(ev):
+    """Event end as aware local datetime (falls back to DURATION / start)."""
+    if "DTEND" in ev:
+        return to_local(ev["DTEND"].dt)
+    if "DURATION" in ev:
+        return start_of(ev) + ev["DURATION"].dt
+    return start_of(ev)
+
+
+def parse_iso(s):
+    """'2026-10-13T12:30:00.000Z' -> aware local datetime."""
+    return datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
+
+
+def read_exceptions(component):
+    """X-EXCEPTIONS is a JSON object {original_date: {title,color,categories,
+    start,end}} - Stedule's own format, NOT RECURRENCE-ID."""
+    raw = component.get("X-EXCEPTIONS")
+    if not raw:
+        return {}
+    try:
+        return json.loads(str(raw))
+    except ValueError as e:
+        print(f"WARNING: bad X-EXCEPTIONS ({e})")
+        return {}
+
+
+def apply_exception(occ, exc):
+    occ = occ.copy()
+    if "title" in exc:
+        occ["SUMMARY"] = exc["title"]
+    if "categories" in exc:
+        occ["CATEGORIES"] = exc["categories"]
+    if "color" in exc:
+        occ["COLOR"] = exc["color"]
+    if "start" in exc:
+        # keep the original duration if only the start moved
+        old_len = end_of(occ) - start_of(occ)
+        new_start = parse_iso(exc["start"])
+        occ["DTSTART"] = icalendar.vDDDTypes(new_start)
+        occ.pop("DTEND", None)
+        occ.pop("DURATION", None)
+        occ["DTEND"] = icalendar.vDDDTypes(
+            parse_iso(exc["end"]) if "end" in exc else new_start + old_len)
+    elif "end" in exc:
+        occ["DTEND"] = icalendar.vDDDTypes(parse_iso(exc["end"]))
+    return occ
+
+
+def expand_with_exceptions(cal, now, end):
+    """Like recurring_ical_events.between(), but applies X-EXCEPTIONS.
+    Series with exceptions are expanded over a wider window (covering all
+    original dates named in the exceptions), because an occurrence can be
+    moved into [now, end] from outside it. Afterwards the REAL (possibly
+    moved) times are checked against [now, end]."""
+    result = []
+    for comp in cal.walk("VEVENT"):
+        exceptions = read_exceptions(comp)
+        if not exceptions:
+            continue
+        days = [datetime.date.fromisoformat(k) for k in exceptions]
+        lo = min(now, to_local(min(days))) - datetime.timedelta(days=1)
+        hi = max(end, to_local(max(days))) + datetime.timedelta(days=2)
+        one = icalendar.Calendar()
+        one.add_component(comp)
+        for occ in recurring_ical_events.of(one).between(lo, hi):
+            key = start_of(occ).date().isoformat()      # ORIGINAL date
+            if key in exceptions:
+                occ = apply_exception(occ, exceptions[key])
+            if end_of(occ) > now and start_of(occ) <= end:
+                result.append(occ)
+    return result
+
+
+def load_events(files, now):
+    end = now + datetime.timedelta(hours=max(HOURS, HOURS_IMPORTANT))
+    events = []
+    for f in files:
+        try:
+            cal = icalendar.Calendar.from_ical(f.read_bytes())
+            # plain events and series WITHOUT exceptions
+            plain = icalendar.Calendar()
+            for comp in cal.walk("VEVENT"):
+                if not read_exceptions(comp):
+                    plain.add_component(comp)
+            found = recurring_ical_events.of(plain).between(now, end)
+            events += [e for e in found if not is_cancelled(e)]
+            # series WITH exceptions
+            events += expand_with_exceptions(cal, now, end)
+        except Exception as e:            # broken / half-synced file
+            print(f"WARNING: could not read {f}: {e}")
+    events = dedupe(sorted(events, key=start_of))
+    events = [ev for ev in events if is_visible(ev, now)]
+    return select_events(events, now)
+
+
+def is_all_day(ev):
+    return not isinstance(ev["DTSTART"].dt, datetime.datetime)
+
+
+def label_time(ev, now):
+    s = start_of(ev)
+    if not is_all_day(ev):
+        return s.strftime("%H%M")
+    return "tday" if s.date() == now.date() else "tmrw"
+
+
+TITLE_MAP = {"🍽": "Meal", "💤": "Sleep", "🚿": "Shower", "🚊": "To Hamm/DoDorm"}
+
+def label_title(ev):
+    # uses the SUMMARY of the (possibly edited) occurrence
+    title = str(ev.get("SUMMARY", "(no title)")).replace("\ufe0f", "").strip()
+    return TITLE_MAP.get(title, title)
+
+def progress_fraction(ev, now):
+    """0.0 = event is HOURS or more away, 1.0 = event has started.
+    The bar therefore fills up (left to right) as the event approaches."""
+    remaining = (start_of(ev) - now).total_seconds()
+    frac = 1 - remaining / (HOURS_PB * 3600)
+    return max(0.0, min(1.0, frac))
+
+
+# =========================================================================
+# RENDERING
+# =========================================================================
+def load_font():
+    if FONT_PATH:
+        return ImageFont.truetype(str(FONT_PATH), FONT_SIZE)
+    try:
+        return ImageFont.load_default(size=FONT_SIZE)   # Pillow >= 10.1
+    except TypeError:
+        print("WARNING: Pillow < 10.1 - using the small fixed default font; "
+              "layout will differ from the PC preview. Set FONT_PATH.")
+        return ImageFont.load_default()
+
+
+def fit(text, draw, font, max_width):
+    """Shorten text with '...' until it fits into max_width pixels."""
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    while text and draw.textlength(text + "...", font=font) > max_width:
+        text = text[:-1]
+    return text + "..."
+
+
+def draw_progress_bar(layer, x, y, fraction, label, font):
+    """Outlined box with the time label inside. The box fills from right to left; 
+    where it is filled, the label is shown inverted (knocked out).
+
+    layer: (image, draw) pair of the channel to draw on."""
+    img, draw = layer
+    top, bottom = y + 1, y + FONT_SIZE + 1
+    right = x + PB_WIDTH - 1
+
+    draw.rectangle((x, top, right, bottom), outline=INK, width=1)
+    inner_w = PB_WIDTH - 2  
+    for offset in range(inner_w//HOURS_PB, inner_w, inner_w//HOURS_PB):
+        draw.point((x + 1 + offset, top), fill=NO_INK)
+    draw.text((x + 40, y), label, font=font, fill=INK)
+                    # space inside the outline
+    fill_w = round(fraction * inner_w)
+    if fill_w > 0:
+        #box = (x + 1, top + 1, x + 1 + fill_w, bottom)   # fill from left to right
+        box = (right - fill_w, top + 1, right, bottom)   # fill from right to left
+        region = img.crop(box).convert("L")
+        img.paste(ImageOps.invert(region).convert("1"), box)
+
+def render_logo(layer, x, y):
+    img, draw = layer
+
+    stetai_logo_coding = [
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [1, 1, 1, 0, 0, 0, 0, 1, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 1, 0, 1, 1, 0, 1, 1, 1],
+        [0, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    ]
+
+    stetai_logo_coding2x2 = [
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [1, 1, 0, 0, 1, 1, 0, 0, 1, 1],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+        [0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
+    ]
+
+    logo = stetai_logo_coding
+
+    for row, line in enumerate(logo):
+        for col, value in enumerate(line):
+            if value:
+                draw.point((x + col, y + row), fill=INK)
+
+
+def render(header, events, now):
+    """Returns (black_layer, red_layer) as 1-bit images."""
+
+    # ---------------------------------------------------------------------
+    # BOTH channels are created fresh on EVERY run, i.e. cleared to "no ink".
+    # The red channel is cleared and sent even when nothing is drawn in red:
+    # the panel keeps its red memory, so old red content could otherwise
+    # reappear (or the whole background could turn red).
+    # ---------------------------------------------------------------------
+    black = Image.new("1", (WIDTH, HEIGHT), NO_INK)
+    red = Image.new("1", (WIDTH, HEIGHT), NO_INK)
+    black_l = (black, ImageDraw.Draw(black))
+    red_l = (red, ImageDraw.Draw(red))
+    font = load_font()
+
+    # ---------------------------------------------------------------------
+    # CHOOSE THE CHANNEL FOR EACH ELEMENT
+    # Default: everything black. To use red, UNCOMMENT the "= red_l" line.
+    # ---------------------------------------------------------------------
+    header_layer = black_l
+    #header_layer = red_l             # <- uncomment: header in red
+
+    separator_layer = black_l
+    #separator_layer = red_l          # <- uncomment: separator line in red
+
+    today_layer = black_l
+    #today_layer = red_l              # <- today's events in red
+    #now_layer = black_l
+    now_layer = red_l
+
+    important_layer = red_l         # <- background of important events
+
+    # ---- header -----------------------------------------------------------
+    header_layer[1].text((MARGIN_X, 0), header, font=font, fill=INK)
+    separator_layer[1].line((0, LINE_H, WIDTH - 1, LINE_H), fill=INK, width=1)
+
+    # ---- events -----------------------------------------------------------
+    max_w = WIDTH - 2 * MARGIN_X - (PB_WIDTH + 2)
+    y = LINE_H + 2
+
+    if not events:
+        black_l[1].text((MARGIN_X, y), "No events", font=font, fill=INK)
+
+    for ev in events[:MAX_LINES]:
+        title_x = MARGIN_X + PB_WIDTH + 2
+        is_today = start_of(ev).date() == now.date()
+        layer = today_layer if is_today else black_l
+        if is_important(ev):
+            layer = important_layer
+        if progress_fraction(ev, now) == 1:
+            layer = now_layer
+        draw = layer[1]
+
+        # progress bar with time label (fills right to left)
+        draw_progress_bar(layer, MARGIN_X, y,
+                          progress_fraction(ev, now), label_time(ev, now), font)
+
+        # title
+        draw.text((title_x, y),
+                  fit(label_title(ev), draw, font, max_w), font=font, fill=INK)
+
+        # determine whether event is important
+        if is_important(ev):
+            layer = important_layer 
+            img, draw = layer
+
+            top, bottom = y + 1, y + FONT_SIZE + 2
+            box = (title_x, top, title_x + max_w, bottom)
+            region = img.crop(box).convert("L")
+            img.paste(ImageOps.invert(region).convert("1"), box)
+        
+        y += LINE_H
+
+    render_logo(red_l, WIDTH - 12 - MARGIN_X, 4) # 18 here is the width of the logo defined in the matrix
+
+    return black, red
+
+
+def has_ink(layer):
+    """True if the 1-bit layer contains at least one ink pixel."""
+    return ImageOps.invert(layer.convert("L")).getbbox() is not None
+
+
+def compose_preview(black, red):
+    """Combine both channels into one RGB picture. Where a pixel is set in
+    both channels, red is drawn on top (assumption - check on the real panel)."""
+    rgb = Image.new("RGB", (WIDTH, HEIGHT), (255, 255, 255))
+    box = (0, 0, WIDTH, HEIGHT)
+    rgb.paste((0, 0, 0), box, ImageOps.invert(black.convert("L")))
+    rgb.paste((200, 0, 0), box, ImageOps.invert(red.convert("L")))
+    return rgb.resize((WIDTH * PREVIEW_SCALE, HEIGHT * PREVIEW_SCALE),
+                      Image.Resampling.NEAREST)
+
+
+# =========================================================================
+# PANEL OUTPUT (jairosh/raspberrypi-ssd1680)
+# =========================================================================
+def to_masks(black, red):
+    """1-bit layers -> (black_mask, red_mask), bool arrays [HEIGHT, WIDTH],
+    True = ink. Black is removed wherever red is set: the SSD1680 shows red
+    whenever the red RAM bit is 1, whatever the B/W bit says, so this changes
+    nothing visible but leaves no ambiguous pixels."""
+    black_ink = ~np.asarray(black, dtype=bool)   # mode "1": True = white
+    red_ink = ~np.asarray(red, dtype=bool)
+    return black_ink & ~red_ink, red_ink
+
+
+def pack(mask):
+    """bool [H, W] -> (bytes, width, height) in draw_bitmap() format:
+    row-major, MSB = leftmost pixel, set bit = paint. The width is padded to a
+    multiple of 8 with 0 bits, because draw_bitmap() only wraps to the next
+    row when the bit counter hits the width exactly (250 never would)."""
+    h, w = mask.shape
+    pad = (-w) % 8
+    if pad:
+        mask = np.pad(mask, ((0, 0), (0, pad)))
+    return np.packbits(mask, axis=1).ravel(), w + pad, h
+
+
+def image_digest(black, red):
+    return hashlib.sha256(black.tobytes() + red.tobytes()).hexdigest()
+
+
+def read_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def refresh_needed(digest, force):
+    """Returns (True, "") or (False, reason)."""
+    if force:
+        return True, ""
+    state = read_state()
+    if state.get("digest") == digest:
+        return False, "image unchanged"
+    age = time.time() - state.get("time", 0)
+    if age < MIN_REFRESH_S:
+        return False, f"last refresh only {age:.0f} s ago (< {MIN_REFRESH_S} s)"
+    return True, ""
+
+
+def _on_timeout(signum, frame):
+    raise TimeoutError(f"panel still busy after {BUSY_TIMEOUT_S} s")
+
+
+def sleep_panel(display, cmd):
+    """The driver has no public sleep function and close() only releases SPI
+    and GPIO. write_buffer() ends with update option 0xCC, which leaves the
+    analog (high-voltage) block enabled. So: switch analog + clock off with
+    the driver's own _power_off() (0x22 0x83, 0x20), then deep sleep mode 1
+    (0x10 0x01). Only a hardware reset wakes it - init() does that next run."""
+    display._power_off()
+    display._write_command(cmd.DEEP_SLEEP_MODE)
+    display._write_data_byte(cmd.DEEP_SLEEP_MODE_ENTER_DSM1)
+
+
+def push_to_panel(black, red):
+    if DRIVER_DIR.is_dir():
+        sys.path.insert(0, str(DRIVER_DIR))   # works from any folder / cron
+    import RPi.GPIO as GPIO
+    import raspberrypi_epd
+    import raspberrypi_epd.commands as cmd
+    Color = raspberrypi_epd.Color
+
+    black_mask, red_mask = to_masks(black, red)
+    GPIO.setmode(GPIO.BCM)
+    display = raspberrypi_epd.WeAct213(busy=PIN_BUSY, reset=PIN_RESET,
+                                       dc=PIN_DC, cs=PIN_CS)
+    signal.signal(signal.SIGALRM, _on_timeout)
+    signal.alarm(BUSY_TIMEOUT_S)
+    try:
+        display.init()
+        display.set_rotation(ROTATION)
+        # Every visible pixel is written explicitly, so fill() is not needed.
+        # (fill() calls write_buffer() itself = one extra ~20 s refresh.)
+        # WHITE/BLACK also clear the red bit; RED afterwards sets it.
+        # The WHITE pass covers all 128 canvas rows, so the 6 rows the panel
+        # (probably) doesn't show are white too instead of the buffer's
+        # initial 0 = black - harmless if hidden, and visible in --border-test.
+        white = np.ones((CANVAS_ROWS, WIDTH), dtype=bool)
+        white[Y_OFFSET:Y_OFFSET + HEIGHT] = ~black_mask
+        for mask, y, color in ((white, 0, Color.WHITE),
+                               (black_mask, Y_OFFSET, Color.BLACK),
+                               (red_mask, Y_OFFSET, Color.RED)):
+            data, w, h = pack(mask)
+            display.draw_bitmap(data, 0, y, w, h, color)
+        t = time.monotonic()
+        display.write_buffer()          # sends both RAMs AND runs the update
+        print(f"Panel updated in {time.monotonic() - t:.1f} s")
+        sleep_panel(display, cmd)
+    except TimeoutError as e:
+        print(f"ERROR: {e}. Check the BUSY wire. Resetting the controller.")
+        GPIO.output(PIN_RESET, GPIO.LOW)       # best effort: drop HV state
+        time.sleep(0.01)
+        GPIO.output(PIN_RESET, GPIO.HIGH)
+        raise
+    finally:
+        signal.alarm(0)
+        display.close()                 # SPI close + GPIO.cleanup()
+
+
+# =========================================================================
+# MAIN
+# =========================================================================
+def parse_args():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("sources", nargs="*", type=pathlib.Path,
+                    help="ICS files or folders (default: ICS_SOURCES)")
+    ap.add_argument("--preview", action="store_true",
+                    help="only write PNGs, do not touch the panel")
+    ap.add_argument("--force", action="store_true",
+                    help="refresh even if unchanged or too soon")
+    ap.add_argument("--border-test", action="store_true",
+                    help="draw a 1-px frame around the full 250x122 area")
+    return ap.parse_args()
+
+
+def main():
+    args = parse_args()
+    files = collect_ics_files(args.sources or ICS_SOURCES)
+    print(f"Reading {len(files)} ICS file(s)")
+
+    now = datetime.datetime.now().astimezone()      # timezone-aware local time
+    if DEBUG:
+        now = datetime.datetime.fromisoformat("2026-10-12T16:00:30.000+0200")      # debug
+    events = load_events(files, now)
+
+    header = now.strftime("%y%m%d %A")
+    black, red = render(header, events, now)
+    if args.border_test:
+        ImageDraw.Draw(black).rectangle((0, 0, WIDTH - 1, HEIGHT - 1), outline=INK)
+
+    black.save(OUTPUT_DIR / "layer_black.png")
+    red.save(OUTPUT_DIR / "layer_red.png")
+    pv = compose_preview(black, red)
+    pv.save(OUTPUT_DIR / "preview1.png")
+    pv.save(OUTPUT_DIR / "preview2.png")
+
+    print(f"Events found: {len(events)} (showing up to {MAX_LINES})")
+    print("Red channel:", "contains red ink" if has_ink(red)
+          else "EMPTY - still cleared and sent as all 'no ink'")
+    print(f"Saved preview1/2.png, layer_black.png, layer_red.png in {OUTPUT_DIR}")
+
+    if args.preview:
+        return
+    digest = image_digest(black, red)
+    ok, reason = refresh_needed(digest, args.force)
+    if not ok:
+        print(f"Panel not refreshed: {reason}.")
+        return
+    push_to_panel(black, red)
+    STATE_FILE.write_text(json.dumps({"digest": digest, "time": time.time()}))
+
+
+if __name__ == "__main__":
+    main()
