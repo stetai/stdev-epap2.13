@@ -49,7 +49,7 @@ ICS_SOURCES = [
 ]
 
 if DEBUG:
-    ICS_SOURCES = [pathlib.Path("/home/stetai/StVau_003/Stedule Data Test/calendar2.ics")]
+    ICS_SOURCES = [pathlib.Path("/mnt/data/Documents/StVau_003/Stedule Data Test/calendar2.ics")]
 
 HOURS = 24          # how many hours ahead to show regular events
 HOURS_IMPORTANT = HOURS  # how many hours ahead to show 'important' events
@@ -69,8 +69,9 @@ NO_INK, INK = 1, 0
 # Font. None = Pillow's built-in font (needs Pillow >= 10.1 for FONT_SIZE to
 # work; older Pillow silently falls back to a tiny fixed font). For identical
 # results on PC and Pi, copy one .ttf next to this script and point here, e.g.
-# FONT_PATH = OUTPUT_DIR / "DejaVuSans-Bold.ttf"
-FONT_PATH = None
+#FONT_PATH = OUTPUT_DIR / "DejaVuSans-Bold.ttf"
+#FONT_PATH = None
+FONT_PATH = OUTPUT_DIR / "aileron-latin-700-normal.ttf"
 
 # ---- panel / driver -------------------------------------------------------
 DRIVER_DIR = pathlib.Path.home() / "raspberrypi-ssd1680"   # the cloned repo
