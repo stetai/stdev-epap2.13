@@ -42,13 +42,14 @@ DEBUG = False
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
-    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
+    pathlib.Path("/home/stetai/StVau_003/Stedule Data/main.ics")
+    #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
     #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
     #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test"), # a whole folder
 ]
 
 if DEBUG:
-    ICS_SOURCES = [pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics")]
+    ICS_SOURCES = [pathlib.Path("/home/stetai/StVau_003/Stedule Data Test/calendar2.ics")]
 
 HOURS = 24          # how many hours ahead to show regular events
 HOURS_IMPORTANT = HOURS  # how many hours ahead to show 'important' events
