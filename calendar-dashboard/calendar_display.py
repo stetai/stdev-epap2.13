@@ -579,6 +579,7 @@ def push_to_panel(black, red):
         display.init()
         print("Initialize Display.")
         display.set_rotation(ROTATION)
+        display._update_partial = display._update_full
         # Every visible pixel is written explicitly, so fill() is not needed.
         # (fill() calls write_buffer() itself = one extra ~20 s refresh.)
         # WHITE/BLACK also clear the red bit; RED afterwards sets it.
