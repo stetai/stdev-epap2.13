@@ -7,4 +7,5 @@ dependencies = [
     "icalendar",
     "recurring_ical_events",
     "pillow>=10.1",
+    "numpy"
 ]

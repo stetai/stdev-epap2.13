@@ -444,6 +444,8 @@ def render(header, events, now):
         black_l[1].text((MARGIN_X, y), "No events", font=font, fill=INK)
 
     for ev in events[:MAX_LINES]:
+        print(f"Considering event: {label_title(ev)}")
+
         title_x = MARGIN_X + PB_WIDTH + 2
         is_today = start_of(ev).date() == now.date()
         layer = today_layer if is_today else black_l
@@ -561,6 +563,7 @@ def sleep_panel(display, cmd):
 def push_to_panel(black, red):
     if DRIVER_DIR.is_dir():
         sys.path.insert(0, str(DRIVER_DIR))   # works from any folder / cron
+        print("Load Driver.")
     import RPi.GPIO as GPIO
     import raspberrypi_epd
     import raspberrypi_epd.commands as cmd
@@ -574,6 +577,7 @@ def push_to_panel(black, red):
     signal.alarm(BUSY_TIMEOUT_S)
     try:
         display.init()
+        print("Initialize Display.")
         display.set_rotation(ROTATION)
         # Every visible pixel is written explicitly, so fill() is not needed.
         # (fill() calls write_buffer() itself = one extra ~20 s refresh.)
