@@ -49,7 +49,10 @@ ICS_SOURCES = [
 ]
 
 if DEBUG:
-    ICS_SOURCES = [pathlib.Path("/mnt/data/Documents/StVau_003/Stedule Data Test/calendar2.ics")]
+    ICS_SOURCES = [
+        pathlib.Path("/mnt/data/Documents/StVau_003/Stedule Data/main.ics"),
+        #pathlib.Path("/mnt/data/Documents/StVau_003/Stedule Data Test/calendar2.ics")
+    ]
 
 HOURS = 24          # how many hours ahead to show regular events
 HOURS_IMPORTANT = HOURS  # how many hours ahead to show 'important' events
@@ -72,6 +75,7 @@ NO_INK, INK = 1, 0
 #FONT_PATH = OUTPUT_DIR / "DejaVuSans-Bold.ttf"
 #FONT_PATH = None
 FONT_PATH = OUTPUT_DIR / "aileron-latin-700-normal.ttf"
+FONT_PATH = OUTPUT_DIR / "stetai_pixeltype.ttf"
 
 # ---- panel / driver -------------------------------------------------------
 DRIVER_DIR = pathlib.Path.home() / "raspberrypi-ssd1680"   # the cloned repo

@@ -28,7 +28,7 @@ DEBUG = False
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
-    pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data/main.ics"),
+    pathlib.Path("/mnt/data/Documents/StVau_003/Stedule Data/main.ics"),
     #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test/calendar2.ics"),
     #pathlib.Path("/mnt/data/Documents/StVau_001/4 Vault/Coding/Stedule/Stedule Data Test"), # a whole folder
 ]
