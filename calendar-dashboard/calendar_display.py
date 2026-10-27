@@ -38,7 +38,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps   # "PIL" = the Pillow pac
 # =========================================================================
 WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 
-DEBUG = True
+DEBUG = False
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
