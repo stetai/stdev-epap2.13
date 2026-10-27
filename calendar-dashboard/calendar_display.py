@@ -38,7 +38,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps   # "PIL" = the Pillow pac
 # =========================================================================
 WIDTH, HEIGHT = 250, 122      # landscape; matches set_rotation(270) on the Pi
 
-DEBUG = False
+DEBUG = True
 
 # Files and/or folders to read. Absolute paths work from anywhere.
 ICS_SOURCES = [
@@ -637,7 +637,7 @@ def main():
 
     now = datetime.datetime.now().astimezone()      # timezone-aware local time
     if DEBUG:
-        now = datetime.datetime.fromisoformat("2026-10-12T16:00:30.000+0200")      # debug
+        now = datetime.datetime.fromisoformat("2026-10-14T16:00:30.000+0200")      # debug
     events = load_events(files, now)
 
     header = now.strftime("%y%m%d %A")
